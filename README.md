@@ -10,3 +10,8 @@ Features
 *Sensitive Data Scanning: Analyzes log files in the artifacts for potential sensitive information.
 
 *Output: Displays any potential sensitive information found directly in the terminal.
+
+Usage
+```zsh
+foo@bar build_artifact_search % ./github_artifact_analyzer.py <owner>/<repo_name> <github_token>
+```
