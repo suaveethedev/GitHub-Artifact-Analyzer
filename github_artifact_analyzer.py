@@ -4,7 +4,7 @@ import argparse, os, re, requests, zipfile
 parser = argparse.ArgumentParser(description='Used to search through a folder containing build artifacts')
 parser.add_argument("repo", help="<owner>/<repo>")
 parser.add_argument("token", help="github token to authenticate to github")
-# parser.add_argument('folder', help='folder containing log files', nargs='*')
+parser.add_argument("-o", "--output", help="Output file to write matching lines.", type=str)
 args = parser.parse_args()
 
 patterns = [
@@ -77,18 +77,27 @@ for artifact in artifacts.get("artifacts", []):
 for filename in os.listdir(zipped_folder):
     file_path = os.path.join(zipped_folder, f"{filename}")
     if os.path.isfile(file_path):
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(f"{log_folder}")
-            zip_ref.close()
+        try:
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                zip_ref.extractall(f"{log_folder}")
+                zip_ref.close()
+        except zipfile.BadZipfile:
+            print(f"{file_path} is a bad file path .. skipping")
 
 for file in os.listdir(f"{log_folder}"):
     with open(f"{log_folder}/{file}", "r") as open_file:
         try:
             for i, line in enumerate(open_file.readlines(), start=1):
-                match = combined_pattern.search(line)
-                if match:
-                    print(f"Potential secret found in {working_folder}/artifacts_contents/{file} on line {i}:")
-                    print(f"\tMatched string: {line.strip()}")
-            open_file.close()
+                for word in line.split():
+                    match = combined_pattern.search(word)
+                    if match:
+                        print(f"Potential secret found in {working_folder}/artifacts_contents/{file} on line {i}:")
+                        print(f"\tMatched string: {word}")
+                        if args.output:
+                            with open(args.output, "a+") as output_file:
+                                if word not in output_file:
+                                    output_file.write(word+"\n")
+                                output_file.close() # Write to the output file
+
         except UnicodeDecodeError:
             print(f"File: {file} is not un utf-8.")
