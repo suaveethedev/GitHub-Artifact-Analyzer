@@ -1,103 +1,109 @@
 #!/usr/bin/env python3
 import argparse, os, re, requests, zipfile
+from utils.repo_utils import get_repos_for_owner
+from utils.file_utils import search_files_for_sensitive_info, extract_zip_files_from_folder
+from utils.artifact_utils import download_artifacts_concurrently
 
-parser = argparse.ArgumentParser(description='Used to search through a folder containing build artifacts')
-parser.add_argument("repo", help="<owner>/<repo>")
-parser.add_argument("token", help="github token to authenticate to github")
-parser.add_argument("-o", "--output", help="Output file to write matching lines.", type=str)
-args = parser.parse_args()
 
-patterns = [
-    r'AWS_ACCESS_KEY_ID\s*=\s*[\'"]?([A-Z0-9]{20})[\'"]?',
-    r'AWS_SECRET_ACCESS_KEY\s*=\s*[\'"]?([A-Za-z0-9/+=]{40})[\'"]?',
-    r'GCP_SERVICE_ACCOUNT_KEY\s*=\s*[\'"]?([A-Za-z0-9-]{30,})[\'"]?',
-    r'AZURE_CLIENT_ID\s*=\s*[\'"]?([a-z0-9-]{36})[\'"]?',
-    r'AZURE_CLIENT_SECRET\s*=\s*[\'"]?([a-zA-Z0-9-_]{32,})[\'"]?',
-    r'DB_PASSWORD\s*=\s*[\'"]?(.+)[\'"]?',
-    r'DATABASE_URL\s*=\s*[\'"]?(.+)[\'"]?',
-    r'API_KEY\s*=\s*[\'"]?(.+)[\'"]?',
-    r'SECRET_KEY\s*=\s*[\'"]?(.+)[\'"]?',
-    r'JWT_SECRET\s*=\s*[\'"]?(.+)[\'"]?',
-    r'SSH_PRIVATE_KEY\s*=\s*[\'"]?(.+)[\'"]?',
-    r'GITHUB_TOKEN\s*=\s*[\'"]?(.+)[\'"]?',
-    r'CI_JOB_TOKEN\s*=\s*[\'"]?(.+)[\'"]?',
-    r'SLACK_WEBHOOK_URL\s*=\s*[\'"]?(.+)[\'"]?',
-    r'Authorization:\s*[\'"]?(.+)[\'"]?',
-    r'Bearer\s+([A-Za-z0-9-_\.]+)',
-    r'client_secret\s*=\s*[\'"]?(.+)[\'"]?',
-    r'client_id\s*=\s*[\'"]?(.+)[\'"]?',
-    r'.pem\s*=\s*[\'"]?(.+)[\'"]?',
-    r'.key\s*=\s*[\'"]?(.+)[\'"]?',
-    r'password\s*=\s*[\'"]?(.+)[\'"]?',
-    r'arn:(aws|aws-us-gov|aws-cn):'
-]
-combined_pattern = re.compile('|'.join(patterns))
-owner, repo_name = str(args.repo).split("/")
+def main():
+    parser = argparse.ArgumentParser(
+        description='Script to download GitHub artifacts and search for sensitive information.')
 
-# GitHub Actions Artifacts API URL
-artifacts_url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/artifacts"
+    # Required GitHub token argument
+    parser.add_argument("--token", "-t", required=True, help="GitHub token is required for authentication.")
 
-# Headers for the API request
-headers = {
-    "Authorization": f"token {args.token}",
-    "Accept": "application/vnd.github.v3+json"
-}
+    # optional user and repo arguments
+    parser.add_argument( "--user", "-u", help="GitHub username or organization name.", type=str)
+    parser.add_argument( "--repo", "-r",
+                         help="GitHub repository name (optional, but must be used with --user).", type=str)
+    parser.add_argument("--output", "-o",
+                        help="Filepath to store the secrets extracted from artifacts.", type=str)
 
-# Make a request to the GitHub Actions API to get the list of artifacts
-response = requests.get(artifacts_url, headers=headers)
-artifacts = response.json()
+    args = parser.parse_args()
 
-working_folder = os.getcwd() + "/{}".format(repo_name)
-zipped_folder = working_folder + "/zipped"
-log_folder = working_folder + "/logs"
+    # Ensure either --user or both --user and --repo are provided along with the token
+    if not args.user and not args.repo:
+        parser.error("You must provide either a --user or a --user with --repo along with the --token.")
 
-os.makedirs(zipped_folder, exist_ok=True)
-os.makedirs(log_folder, exist_ok=True)
+    # If --repo is provided, --user must be provided as well
+    if args.repo and not args.user:
+        parser.error("--repo requires --user to be specified.")
 
-for artifact in artifacts.get("artifacts", []):
-    artifact_id = artifact["id"]
-    artifact_name = artifact["name"]
+    # Arguments passed successfully, proceed with the script logic
+    if args.user and args.repo:
+        print(f"Owner/Repo: {args.user}/{args.repo}")
 
-    file_path = os.path.join(zipped_folder, f"{artifact_id}.zip")
-    if not os.path.exists(file_path):
-        # URL to download the artifact
-        download_url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/artifacts/{artifact_id}/zip"
+        # Folders to use in later programming
+        working_folder = os.getcwd() + "/{}".format(args.repo)
+        zipped_folder = working_folder + "/zipped"
+        log_folder = working_folder + "/logs"
+        os.makedirs(zipped_folder, exist_ok=True)
+        os.makedirs(log_folder, exist_ok=True)
 
-        # Download the artifact
-        download_response = requests.get(download_url, headers=headers)
+        # GitHub Actions Artifacts API URL
+        artifacts_url = f"https://api.github.com/repos/{args.user}/{args.repo}/actions/artifacts"
 
-        print(f"writing {artifact_id}.zip")
-        with open(file_path, "wb") as f:
-            f.write(download_response.content)
-            f.close()
-    else:
-        print(f"{artifact_id}.zip already exists .. skipping")
+        # Headers for the API request
+        headers = {
+            "Authorization": f"token {args.token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
 
-# Issue is the root directory contains a folder
-for filename in os.listdir(zipped_folder):
-    file_path = os.path.join(zipped_folder, f"{filename}")
-    if os.path.isfile(file_path):
-        try:
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                zip_ref.extractall(f"{log_folder}")
-                zip_ref.close()
-        except zipfile.BadZipfile:
-            print(f"{file_path} is a bad file path .. skipping")
+        # Make a request to the GitHub Actions API to get the list of artifacts
+        response = requests.get(artifacts_url, headers=headers)
+        artifacts = response.json()  # Response to iterate and pass to function
 
-for file in os.listdir(f"{log_folder}"):
-    with open(f"{log_folder}/{file}", "r") as open_file:
-        try:
-            for i, line in enumerate(open_file.readlines(), start=1):
-                for word in line.split():
-                    match = combined_pattern.search(word)
-                    if match:
-                        print(f"Potential secret found in {working_folder}/artifacts_contents/{file} on line {i}:")
-                        print(f"\tMatched string: {word}")
-                        if args.output:
-                            with open(args.output, "a+") as output_file:
-                                if word not in output_file:
-                                    output_file.write(word+"\n")
-                                output_file.close() # Write to the output file
+        download_artifacts_concurrently(artifacts, zipped_folder, args.user, args.repo, headers)
 
-        except UnicodeDecodeError:
-            print(f"File: {file} is not un utf-8.")
+        # Issue is the root directory contains a folder
+        extract_zip_files_from_folder(zipped_folder, log_folder)
+
+        # Setting the file path for the file containing the sensitive data
+        if args.output:
+            output_file = args.output
+        else:
+            output_file = os.path.join(working_folder, "secrets.txt")
+
+        search_files_for_sensitive_info(log_folder, output_file)
+
+    elif args.user:
+        print(f"User/Owner: {args.user}")
+        repos = get_repos_for_owner(args.token, args.user)
+        for repo in repos:
+
+            # Folders to use in later programming
+            working_folder = os.getcwd() + "/{}".format(repo)
+            zipped_folder = working_folder + "/zipped"
+            log_folder = working_folder + "/logs"
+            os.makedirs(zipped_folder, exist_ok=True)
+            os.makedirs(log_folder, exist_ok=True)
+
+            # GitHub Actions Artifacts API URL
+            artifacts_url = f"https://api.github.com/repos/{args.user}/{args.repo}/actions/artifacts"
+
+            # Headers for the API request
+            headers = {
+                "Authorization": f"token {args.token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+
+            # Make a request to the GitHub Actions API to get the list of artifacts
+            response = requests.get(artifacts_url, headers=headers)
+            artifacts = response.json()  # Response to iterate and pass to
+
+            download_artifacts_concurrently(artifacts, zipped_folder, args.user, args.repo, headers)
+
+            # Issue is the root directory contains a folder
+            extract_zip_files_from_folder(zipped_folder, log_folder)
+
+            # Setting the file path for the file containing the sensitive data
+            if args.output:
+                output_file = args.output
+            else:
+                output_file = os.path.join(working_folder, "secrets.txt")
+
+            search_files_for_sensitive_info(log_folder, output_file)
+
+
+if __name__ == "__main__":
+    main()
