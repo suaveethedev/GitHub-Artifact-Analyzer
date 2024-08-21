@@ -30,6 +30,7 @@ def main():
         parser.error("--repo requires --user to be specified.")
 
     # Arguments passed successfully, proceed with the script logic
+    artifact_folder = os.path.join(os.getcwd() + "artifacts")
     if args.user and args.repo:
         print(f"Owner/Repo: {args.user}/{args.repo}")
 
@@ -72,14 +73,16 @@ def main():
         for repo in repos:
 
             # Folders to use in later programming
-            working_folder = os.getcwd() + "/{}".format(repo)
-            zipped_folder = working_folder + "/zipped"
+            working_folder = os.getcwd() + "/artifacts/{}".format(repo)
+            zipped_folder = os.path.join(working_folder, "zipped")
             log_folder = working_folder + "/logs"
+
             os.makedirs(zipped_folder, exist_ok=True)
             os.makedirs(log_folder, exist_ok=True)
+            os.makedirs(working_folder + "/secrets")
 
             # GitHub Actions Artifacts API URL
-            artifacts_url = f"https://api.github.com/repos/{args.user}/{args.repo}/actions/artifacts"
+            artifacts_url = f"https://api.github.com/repos/{args.user}/{repo}/actions/artifacts"
 
             # Headers for the API request
             headers = {
@@ -91,17 +94,15 @@ def main():
             response = requests.get(artifacts_url, headers=headers)
             artifacts = response.json()  # Response to iterate and pass to
 
-            download_artifacts_concurrently(artifacts, zipped_folder, args.user, args.repo, headers)
+            download_artifacts_concurrently(artifacts, zipped_folder, args.user, repo, headers)
 
             # Issue is the root directory contains a folder
             extract_zip_files_from_folder(zipped_folder, log_folder)
 
             # Setting the file path for the file containing the sensitive data
-            if args.output:
-                output_file = args.output
-            else:
-                output_file = os.path.join(working_folder, "secrets.txt")
 
+            output_file = os.path.join(working_folder, f"secrets/{repo}.txt")
+            print("Output file path: ", output_file)
             search_files_for_sensitive_info(log_folder, output_file)
 
 
