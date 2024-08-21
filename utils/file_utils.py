@@ -52,7 +52,7 @@ def search_files_for_sensitive_info(log_folder_path, output_file_path):
                                 print(f"\tMatched string: {word}")
                                 if output_file_path is not None:
                                     with open(output_file_path, "a+") as output_file:
-                                        if word not in output_file:
+                                        if word not in output_file.readlines():
                                             output_file.write(word + "\n")
                                         output_file.close()  # Write to the output file
                 except UnicodeDecodeError:
